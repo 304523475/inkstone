@@ -57,6 +57,7 @@ crons = ["0 * * * *", "15,45 * * * *"]
 
 [vars]
 APP_NAME = "Inkstone"
+ATTACHMENT_QUOTA_BYTES = "2147483648"
 
 [observability]
 enabled = true
