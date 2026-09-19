@@ -23,6 +23,9 @@ export interface Env {
 
   PUBLIC_URL?: string
 
+  /** Per-account attachment quota in bytes; defaults to 1 GiB. */
+  ATTACHMENT_QUOTA_BYTES?: string
+
   /** Workers AI binding for semantic search; optional so AI search degrades gracefully. */
   AI?: {
     run: <T = unknown>(model: string, inputs: unknown) => Promise<T>

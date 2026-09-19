@@ -71,6 +71,245 @@ const operationId = z.string().min(8).max(128).describe('Stable UUID or unique r
 const noteId = z.string().refine(isValidId, 'Invalid Inkstone note id')
 const expectedRev = z.number().int().positive().describe('Current note rev returned by read_note or fetch')
 
+// Reuse immutable validation schemas; servers and authorization closures remain request-scoped.
+const searchInputSchema = z.object({
+  query: z.string().trim().min(1).max(512),
+  mode: z.enum(['auto', 'lexical', 'semantic', 'hybrid']).default('auto')
+    .describe('auto: hybrid when AI semantic search is enabled, else keyword search; lexical: keyword only; semantic: meaning only; hybrid: both merged'),
+})
+
+const searchOutputSchema = z.object({
+  results: z.array(z.object({ id: z.string(), title: z.string(), url: z.string().url() })),
+})
+
+const fetchInputSchema = z.object({ id: z.string().min(1).max(256) })
+
+const fetchOutputSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  text: z.string(),
+  url: z.string().url(),
+  metadata: z.record(z.string(), z.unknown()),
+})
+
+const searchNotesInputSchema = z.object({
+  query: z.string().trim().min(1).max(512),
+  limit: z.number().int().min(1).max(20).default(10),
+  tags: z.array(z.string().trim().min(1).max(60)).max(8).optional(),
+  folder: z.string().trim().min(1).max(120).optional(),
+  starred: z.boolean().optional(),
+  archived: z.boolean().optional(),
+  mode: z.enum(['auto', 'lexical', 'semantic', 'hybrid']).default('auto')
+    .describe('auto: hybrid when AI semantic search is enabled, else keyword search; lexical: keyword only; semantic: meaning only; hybrid: both merged'),
+})
+
+const listNotesInputSchema = z.object({
+  view: z.enum(['all', 'recent', 'starred', 'archived', 'trash']).default('recent'),
+  limit: z.number().int().min(1).max(50).default(20),
+  cursor: z.string().max(64).optional(),
+})
+
+const readNoteInputSchema = z.object({
+  note_id: noteId,
+  section: z.string().trim().min(1).max(300).optional(),
+  cursor: z.string().max(32).optional(),
+  max_chars: z.number().int().min(1_000).max(40_000).default(12_000),
+  start_line: z.number().int().positive().optional(),
+  end_line: z.number().int().positive().optional(),
+})
+
+const getNoteContextInputSchema = z.object({
+  note_id: noteId,
+  limit: z.number().int().min(1).max(30).default(20),
+})
+
+const listFoldersInputSchema = z.object({})
+
+const listTagsInputSchema = z.object({ limit: z.number().int().min(1).max(200).default(100) })
+
+const createNoteInputSchema = z.object({
+  operation_id: operationId,
+  note_id: noteId.optional(),
+  title: z.string().max(512).optional(),
+  content: z.string().max(2_100_000).default(''),
+  folder_id: noteId.nullable().optional(),
+})
+
+const editNoteInputSchema = z.object({
+  operation_id: operationId,
+  note_id: noteId,
+  expected_rev: expectedRev,
+  operation: z.enum(['replace', 'replace_section', 'append', 'prepend', 'replace_all']),
+  text: z.string().max(2_100_000),
+  old_text: z.string().max(500_000).optional(),
+  section: z.string().trim().min(1).max(300).optional(),
+  title: z.string().max(512).optional(),
+})
+
+const organizeNoteInputSchema = z.object({
+  operation_id: operationId,
+  note_id: noteId,
+  expected_rev: expectedRev,
+  folder_id: noteId.nullable().optional(),
+  starred: z.boolean().optional(),
+  archived: z.boolean().optional(),
+  pinned: z.boolean().optional(),
+})
+
+const trashNoteInputSchema = z.object({
+  operation_id: operationId,
+  note_id: noteId,
+  expected_rev: expectedRev,
+})
+
+const restoreNoteInputSchema = z.object({
+  operation_id: operationId,
+  note_id: noteId,
+  expected_rev: expectedRev,
+})
+
+const duplicateNoteInputSchema = z.object({ operation_id: operationId, note_id: noteId })
+
+const listNoteVersionsInputSchema = z.object({
+  note_id: noteId,
+  limit: z.number().int().min(1).max(50).default(20),
+})
+
+const readNoteVersionInputSchema = z.object({ note_id: noteId, version_id: noteId })
+
+const restoreNoteVersionInputSchema = z.object({
+  operation_id: operationId,
+  note_id: noteId,
+  version_id: noteId,
+  expected_rev: expectedRev,
+})
+
+const createFolderInputSchema = z.object({
+  operation_id: operationId,
+  folder_id: noteId.optional(),
+  name: z.string().trim().min(1).max(120),
+  parent_id: noteId.nullable().optional(),
+  icon: z.string().max(80).nullable().optional(),
+  color: z.string().max(32).nullable().optional(),
+})
+
+const updateFolderInputSchema = z.object({
+  operation_id: operationId,
+  folder_id: noteId,
+  expected_updated_at: z.number().int().nonnegative(),
+  name: z.string().trim().min(1).max(120).optional(),
+  parent_id: noteId.nullable().optional(),
+  icon: z.string().max(80).nullable().optional(),
+  color: z.string().max(32).nullable().optional(),
+})
+
+const createTagInputSchema = z.object({
+  operation_id: operationId,
+  tag_id: noteId.optional(),
+  name: z.string().trim().min(1).max(60),
+  color: z.string().regex(/^#[0-9a-f]{6}$/i).nullable().optional(),
+})
+
+const updateTagInputSchema = z.object({
+  operation_id: operationId,
+  tag_id: noteId,
+  name: z.string().trim().min(1).max(60).optional(),
+  color: z.string().regex(/^#[0-9a-f]{6}$/i).nullable().optional(),
+})
+
+const previewTagChangeInputSchema = z.object({
+  tag_id: noteId,
+  next_name: z.string().trim().min(1).max(60).nullable().optional(),
+})
+
+const deleteTagInputSchema = z.object({ operation_id: operationId, tag_id: noteId })
+
+const previewFolderRemovalInputSchema = z.object({ folder_id: noteId })
+
+const removeFolderAndPromoteContentsInputSchema = z.object({
+  operation_id: operationId,
+  folder_id: noteId,
+  expected_updated_at: z.number().int().nonnegative(),
+})
+
+const bulkOrganizeNotesInputSchema = z.object({
+  operation_id: operationId,
+  items: z.array(z.object({
+    note_id: noteId,
+    expected_rev: expectedRev,
+    folder_id: noteId.nullable().optional(),
+    starred: z.boolean().optional(),
+    archived: z.boolean().optional(),
+    pinned: z.boolean().optional(),
+  })).min(1).max(20),
+})
+
+const exploreNoteGraphInputSchema = z.object({
+  note_id: noteId,
+  depth: z.number().int().min(1).max(3).default(2),
+  max_nodes: z.number().int().min(2).max(100).default(60),
+})
+
+const listBackupRunsInputSchema = z.object({ limit: z.number().int().min(1).max(20).default(10) })
+
+const listAttachmentsInputSchema = z.object({
+  note_id: noteId.optional(),
+  limit: z.number().int().min(1).max(50).default(20),
+  cursor: z.number().int().nonnegative().optional(),
+})
+
+const readAttachmentInputSchema = z.object({
+  attachment_id: noteId,
+  cursor: z.number().int().nonnegative().optional(),
+  max_bytes: z.number().int().min(1024).max(1024 * 1024).default(256 * 1024),
+})
+
+const uploadAttachmentInputSchema = z.object({
+  operation_id: operationId,
+  attachment_id: noteId.optional(),
+  note_id: noteId.nullable().optional(),
+  filename: z.string().trim().min(1).max(180),
+  mime: z.string().trim().min(1).max(255),
+  data: z.string().min(1).max(36_000_000),
+})
+
+const deleteAttachmentInputSchema = z.object({ operation_id: operationId, attachment_id: noteId })
+
+const runBackupInputSchema = z.object({
+  operation_id: operationId,
+  target_ids: z.array(noteId).max(12).optional(),
+})
+
+const getNoteShareInputSchema = z.object({ note_id: noteId })
+
+const getNotePropertiesInputSchema = z.object({ note_id: noteId })
+
+const updateNotePropertiesInputSchema = z.object({
+  operation_id: operationId,
+  note_id: noteId,
+  expected_rev: expectedRev,
+  mode: z.enum(['merge', 'replace']).default('merge'),
+  properties: z.record(z.string().min(1).max(120), z.unknown()),
+})
+
+const queryNotePropertiesInputSchema = z.object({
+  conditions: z.array(z.object({
+    key: z.string().trim().min(1).max(120),
+    operator: z.enum(['exists', 'equals', 'contains']),
+    value: z.unknown().optional(),
+  })).min(1).max(8),
+  limit: z.number().int().min(1).max(50).default(20),
+})
+
+const createNoteShareInputSchema = z.object({
+  operation_id: operationId,
+  note_id: noteId,
+  password: z.string().min(4).max(128).nullable().optional(),
+  expires_in_seconds: z.number().int().min(0).max(365 * 24 * 60 * 60).nullable().optional(),
+})
+
+const revokeNoteShareInputSchema = z.object({ operation_id: operationId, note_id: noteId })
+
 export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpServer {
   const server = new McpServer(
     { name: 'Inkstone Knowledge Base', version: '1.0.0' },
@@ -89,14 +328,8 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     {
       title: 'Search Inkstone',
       description: 'Search private Inkstone notes by keyword and meaning. Returns citation-ready note ids, titles, and absolute URLs. Use before fetch.',
-      inputSchema: z.object({
-        query: z.string().trim().min(1).max(512),
-        mode: z.enum(['auto', 'lexical', 'semantic', 'hybrid']).default('auto')
-          .describe('auto: hybrid when AI semantic search is enabled, else keyword search; lexical: keyword only; semantic: meaning only; hybrid: both merged'),
-      }),
-      outputSchema: z.object({
-        results: z.array(z.object({ id: z.string(), title: z.string(), url: z.string().url() })),
-      }),
+      inputSchema: searchInputSchema,
+      outputSchema: searchOutputSchema,
       annotations: readOnlyAnnotations(),
     },
     async ({ query, mode }, ctx) => safeTool(async () => {
@@ -121,14 +354,8 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     {
       title: 'Fetch Inkstone note',
       description: 'Fetch one private note by id returned from search. Long notes are bounded and include a cursor for read_note.',
-      inputSchema: z.object({ id: z.string().min(1).max(256) }),
-      outputSchema: z.object({
-        id: z.string(),
-        title: z.string(),
-        text: z.string(),
-        url: z.string().url(),
-        metadata: z.record(z.string(), z.unknown()),
-      }),
+      inputSchema: fetchInputSchema,
+      outputSchema: fetchOutputSchema,
       annotations: readOnlyAnnotations(),
     },
     async ({ id }, ctx) => safeTool(async () => {
@@ -142,16 +369,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     {
       title: 'Advanced note search',
       description: 'Search notes with tag, folder, starred, and archive filters; optionally combines keyword and AI semantic search.',
-      inputSchema: z.object({
-        query: z.string().trim().min(1).max(512),
-        limit: z.number().int().min(1).max(20).default(10),
-        tags: z.array(z.string().trim().min(1).max(60)).max(8).optional(),
-        folder: z.string().trim().min(1).max(120).optional(),
-        starred: z.boolean().optional(),
-        archived: z.boolean().optional(),
-        mode: z.enum(['auto', 'lexical', 'semantic', 'hybrid']).default('auto')
-          .describe('auto: hybrid when AI semantic search is enabled, else keyword search; lexical: keyword only; semantic: meaning only; hybrid: both merged'),
-      }),
+      inputSchema: searchNotesInputSchema,
       outputSchema: generalOutputSchema,
       annotations: readOnlyAnnotations(),
     },
@@ -169,11 +387,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     {
       title: 'List notes',
       description: 'List a small, paginated set of recent, starred, archived, or trashed notes. Prefer search_notes for targeted retrieval.',
-      inputSchema: z.object({
-        view: z.enum(['all', 'recent', 'starred', 'archived', 'trash']).default('recent'),
-        limit: z.number().int().min(1).max(50).default(20),
-        cursor: z.string().max(64).optional(),
-      }),
+      inputSchema: listNotesInputSchema,
       outputSchema: generalOutputSchema,
       annotations: readOnlyAnnotations(),
     },
@@ -190,14 +404,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     {
       title: 'Read note range or section',
       description: 'Read a bounded range, named Markdown section, or cursor continuation without dumping a large note into context.',
-      inputSchema: z.object({
-        note_id: noteId,
-        section: z.string().trim().min(1).max(300).optional(),
-        cursor: z.string().max(32).optional(),
-        max_chars: z.number().int().min(1_000).max(40_000).default(12_000),
-        start_line: z.number().int().positive().optional(),
-        end_line: z.number().int().positive().optional(),
-      }),
+      inputSchema: readNoteInputSchema,
       outputSchema: generalOutputSchema,
       annotations: readOnlyAnnotations(),
     },
@@ -221,10 +428,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     {
       title: 'Get note context',
       description: 'Return a note outline plus bounded outgoing links and backlinks. Follows only one graph hop.',
-      inputSchema: z.object({
-        note_id: noteId,
-        limit: z.number().int().min(1).max(30).default(20),
-      }),
+      inputSchema: getNoteContextInputSchema,
       outputSchema: generalOutputSchema,
       annotations: readOnlyAnnotations(),
     },
@@ -242,7 +446,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     {
       title: 'List folders',
       description: 'List the authenticated user’s folder ids, hierarchy paths, and note counts for organizing notes.',
-      inputSchema: z.object({}),
+      inputSchema: listFoldersInputSchema,
       outputSchema: generalOutputSchema,
       annotations: readOnlyAnnotations(),
     },
@@ -254,7 +458,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     {
       title: 'List tags',
       description: 'List private tag names and usage counts for search and organization.',
-      inputSchema: z.object({ limit: z.number().int().min(1).max(200).default(100) }),
+      inputSchema: listTagsInputSchema,
       outputSchema: generalOutputSchema,
       annotations: readOnlyAnnotations(),
     },
@@ -266,13 +470,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     {
       title: 'Create note',
       description: 'Create a private Markdown note. Requires notes:write and an operation_id for safe retry.',
-      inputSchema: z.object({
-        operation_id: operationId,
-        note_id: noteId.optional(),
-        title: z.string().max(512).optional(),
-        content: z.string().max(2_100_000).default(''),
-        folder_id: noteId.nullable().optional(),
-      }),
+      inputSchema: createNoteInputSchema,
       outputSchema: generalOutputSchema,
       annotations: writeAnnotations(true),
     },
@@ -293,16 +491,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     {
       title: 'Edit note safely',
       description: 'Edit using unique exact text, a Markdown section, append/prepend, or full replacement. Requires current expected_rev and stores a version.',
-      inputSchema: z.object({
-        operation_id: operationId,
-        note_id: noteId,
-        expected_rev: expectedRev,
-        operation: z.enum(['replace', 'replace_section', 'append', 'prepend', 'replace_all']),
-        text: z.string().max(2_100_000),
-        old_text: z.string().max(500_000).optional(),
-        section: z.string().trim().min(1).max(300).optional(),
-        title: z.string().max(512).optional(),
-      }),
+      inputSchema: editNoteInputSchema,
       outputSchema: generalOutputSchema,
       annotations: writeAnnotations(true),
     },
@@ -326,15 +515,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     {
       title: 'Organize note',
       description: 'Move a note or change starred, archived, or pinned state using optimistic revision protection.',
-      inputSchema: z.object({
-        operation_id: operationId,
-        note_id: noteId,
-        expected_rev: expectedRev,
-        folder_id: noteId.nullable().optional(),
-        starred: z.boolean().optional(),
-        archived: z.boolean().optional(),
-        pinned: z.boolean().optional(),
-      }),
+      inputSchema: organizeNoteInputSchema,
       outputSchema: generalOutputSchema,
       annotations: writeAnnotations(true),
     },
@@ -357,11 +538,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     {
       title: 'Move note to trash',
       description: 'Soft-delete a note. Requires the separately consented notes:trash scope and current expected_rev; it never permanently purges.',
-      inputSchema: z.object({
-        operation_id: operationId,
-        note_id: noteId,
-        expected_rev: expectedRev,
-      }),
+      inputSchema: trashNoteInputSchema,
       outputSchema: generalOutputSchema,
       annotations: { ...writeAnnotations(true), destructiveHint: true },
     },
@@ -380,11 +557,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     {
       title: 'Restore trashed note',
       description: 'Restore a soft-deleted note using its current trash revision. Requires notes:write.',
-      inputSchema: z.object({
-        operation_id: operationId,
-        note_id: noteId,
-        expected_rev: expectedRev,
-      }),
+      inputSchema: restoreNoteInputSchema,
       outputSchema: generalOutputSchema,
       annotations: writeAnnotations(true),
     },
@@ -403,7 +576,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     {
       title: 'Duplicate note',
       description: 'Create an idempotent private copy of an existing note in the same folder.',
-      inputSchema: z.object({ operation_id: operationId, note_id: noteId }),
+      inputSchema: duplicateNoteInputSchema,
       outputSchema: generalOutputSchema,
       annotations: writeAnnotations(true),
     },
@@ -421,10 +594,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     {
       title: 'List note versions',
       description: 'List bounded historical versions of one private note before reading or restoring one.',
-      inputSchema: z.object({
-        note_id: noteId,
-        limit: z.number().int().min(1).max(50).default(20),
-      }),
+      inputSchema: listNoteVersionsInputSchema,
       outputSchema: generalOutputSchema,
       annotations: readOnlyAnnotations(),
     },
@@ -441,7 +611,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     {
       title: 'Read note version',
       description: 'Read a specific historical note version so its contents can be reviewed before restoration.',
-      inputSchema: z.object({ note_id: noteId, version_id: noteId }),
+      inputSchema: readNoteVersionInputSchema,
       outputSchema: generalOutputSchema,
       annotations: readOnlyAnnotations(),
     },
@@ -458,12 +628,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     {
       title: 'Restore note version',
       description: 'Restore a reviewed historical version with optimistic revision protection and note history.',
-      inputSchema: z.object({
-        operation_id: operationId,
-        note_id: noteId,
-        version_id: noteId,
-        expected_rev: expectedRev,
-      }),
+      inputSchema: restoreNoteVersionInputSchema,
       outputSchema: generalOutputSchema,
       annotations: writeAnnotations(true),
     },
@@ -483,14 +648,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     {
       title: 'Create folder',
       description: 'Create a private folder under an optional existing parent with safe retry.',
-      inputSchema: z.object({
-        operation_id: operationId,
-        folder_id: noteId.optional(),
-        name: z.string().trim().min(1).max(120),
-        parent_id: noteId.nullable().optional(),
-        icon: z.string().max(80).nullable().optional(),
-        color: z.string().max(32).nullable().optional(),
-      }),
+      inputSchema: createFolderInputSchema,
       outputSchema: generalOutputSchema,
       annotations: writeAnnotations(true),
     },
@@ -509,15 +667,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     {
       title: 'Update folder',
       description: 'Rename, move, or change the appearance of a folder with timestamp conflict protection.',
-      inputSchema: z.object({
-        operation_id: operationId,
-        folder_id: noteId,
-        expected_updated_at: z.number().int().nonnegative(),
-        name: z.string().trim().min(1).max(120).optional(),
-        parent_id: noteId.nullable().optional(),
-        icon: z.string().max(80).nullable().optional(),
-        color: z.string().max(32).nullable().optional(),
-      }),
+      inputSchema: updateFolderInputSchema,
       outputSchema: generalOutputSchema,
       annotations: writeAnnotations(true),
     },
@@ -537,12 +687,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     {
       title: 'Create tag',
       description: 'Create a persistent private tag for later use in Markdown notes.',
-      inputSchema: z.object({
-        operation_id: operationId,
-        tag_id: noteId.optional(),
-        name: z.string().trim().min(1).max(60),
-        color: z.string().regex(/^#[0-9a-f]{6}$/i).nullable().optional(),
-      }),
+      inputSchema: createTagInputSchema,
       outputSchema: generalOutputSchema,
       annotations: writeAnnotations(true),
     },
@@ -559,12 +704,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     {
       title: 'Update tag',
       description: 'Rename or recolor a tag; renames safely rewrite Markdown and YAML tag sources with history.',
-      inputSchema: z.object({
-        operation_id: operationId,
-        tag_id: noteId,
-        name: z.string().trim().min(1).max(60).optional(),
-        color: z.string().regex(/^#[0-9a-f]{6}$/i).nullable().optional(),
-      }),
+      inputSchema: updateTagInputSchema,
       outputSchema: generalOutputSchema,
       annotations: writeAnnotations(true),
     },
@@ -581,10 +721,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     {
       title: 'Preview tag change',
       description: 'Preview the note impact and any merge target before renaming or deleting a tag.',
-      inputSchema: z.object({
-        tag_id: noteId,
-        next_name: z.string().trim().min(1).max(60).nullable().optional(),
-      }),
+      inputSchema: previewTagChangeInputSchema,
       outputSchema: generalOutputSchema,
       annotations: readOnlyAnnotations(),
     },
@@ -601,7 +738,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     {
       title: 'Delete tag',
       description: 'Delete one tag and safely remove it from Markdown and YAML sources with version history.',
-      inputSchema: z.object({ operation_id: operationId, tag_id: noteId }),
+      inputSchema: deleteTagInputSchema,
       outputSchema: generalOutputSchema,
       annotations: { ...writeAnnotations(true), destructiveHint: true },
     },
@@ -616,7 +753,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     {
       title: 'Preview folder removal',
       description: 'Preview exactly which notes and child folders would be promoted, including name conflicts.',
-      inputSchema: z.object({ folder_id: noteId }),
+      inputSchema: previewFolderRemovalInputSchema,
       outputSchema: generalOutputSchema,
       annotations: readOnlyAnnotations(),
     },
@@ -632,11 +769,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     {
       title: 'Remove folder and promote contents',
       description: 'Remove one folder while preserving its notes and child folders by moving them to the parent.',
-      inputSchema: z.object({
-        operation_id: operationId,
-        folder_id: noteId,
-        expected_updated_at: z.number().int().nonnegative(),
-      }),
+      inputSchema: removeFolderAndPromoteContentsInputSchema,
       outputSchema: generalOutputSchema,
       annotations: { ...writeAnnotations(true), destructiveHint: true },
     },
@@ -655,17 +788,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     {
       title: 'Bulk organize notes',
       description: 'Safely organize up to 20 explicitly identified notes; every item has its own revision guard.',
-      inputSchema: z.object({
-        operation_id: operationId,
-        items: z.array(z.object({
-          note_id: noteId,
-          expected_rev: expectedRev,
-          folder_id: noteId.nullable().optional(),
-          starred: z.boolean().optional(),
-          archived: z.boolean().optional(),
-          pinned: z.boolean().optional(),
-        })).min(1).max(20),
-      }),
+      inputSchema: bulkOrganizeNotesInputSchema,
       outputSchema: generalOutputSchema,
       annotations: writeAnnotations(true),
     },
@@ -688,11 +811,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     {
       title: 'Explore note graph',
       description: 'Explore a bounded two-way link graph from one note, limited to three hops and 100 nodes.',
-      inputSchema: z.object({
-        note_id: noteId,
-        depth: z.number().int().min(1).max(3).default(2),
-        max_nodes: z.number().int().min(2).max(100).default(60),
-      }),
+      inputSchema: exploreNoteGraphInputSchema,
       outputSchema: generalOutputSchema,
       annotations: readOnlyAnnotations(),
     },
@@ -711,7 +830,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     {
       title: 'List backup runs',
       description: 'List recent backup outcomes without exposing backup credentials or configuration secrets.',
-      inputSchema: z.object({ limit: z.number().int().min(1).max(20).default(10) }),
+      inputSchema: listBackupRunsInputSchema,
       outputSchema: generalOutputSchema,
       annotations: readOnlyAnnotations(),
     },
@@ -727,11 +846,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     {
       title: 'List attachments',
       description: 'List bounded private attachment metadata, optionally for one note.',
-      inputSchema: z.object({
-        note_id: noteId.optional(),
-        limit: z.number().int().min(1).max(50).default(20),
-        cursor: z.number().int().nonnegative().optional(),
-      }),
+      inputSchema: listAttachmentsInputSchema,
       outputSchema: generalOutputSchema,
       annotations: readOnlyAnnotations(),
     },
@@ -747,11 +862,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     {
       title: 'Read attachment chunk',
       description: 'Read a bounded base64 chunk of one private attachment with cursor continuation.',
-      inputSchema: z.object({
-        attachment_id: noteId,
-        cursor: z.number().int().nonnegative().optional(),
-        max_bytes: z.number().int().min(1024).max(1024 * 1024).default(256 * 1024),
-      }),
+      inputSchema: readAttachmentInputSchema,
       outputSchema: generalOutputSchema,
       annotations: readOnlyAnnotations(),
     },
@@ -767,14 +878,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     {
       title: 'Upload attachment',
       description: 'Upload one base64-encoded private attachment using the configured storage and account quota.',
-      inputSchema: z.object({
-        operation_id: operationId,
-        attachment_id: noteId.optional(),
-        note_id: noteId.nullable().optional(),
-        filename: z.string().trim().min(1).max(180),
-        mime: z.string().trim().min(1).max(255),
-        data: z.string().min(1).max(36_000_000),
-      }),
+      inputSchema: uploadAttachmentInputSchema,
       outputSchema: generalOutputSchema,
       annotations: writeAnnotations(true),
     },
@@ -793,7 +897,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     {
       title: 'Delete attachment',
       description: 'Delete one explicitly identified private attachment and queue its stored bytes for cleanup.',
-      inputSchema: z.object({ operation_id: operationId, attachment_id: noteId }),
+      inputSchema: deleteAttachmentInputSchema,
       outputSchema: generalOutputSchema,
       annotations: { ...writeAnnotations(true), destructiveHint: true },
     },
@@ -808,10 +912,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     {
       title: 'Run backup',
       description: 'Run already configured backup targets without revealing or changing their credentials.',
-      inputSchema: z.object({
-        operation_id: operationId,
-        target_ids: z.array(noteId).max(12).optional(),
-      }),
+      inputSchema: runBackupInputSchema,
       outputSchema: generalOutputSchema,
       annotations: writeAnnotations(true),
     },
@@ -827,7 +928,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     {
       title: 'Get note share',
       description: 'Inspect the current public-share state of one private note without reading any password hash.',
-      inputSchema: z.object({ note_id: noteId }),
+      inputSchema: getNoteShareInputSchema,
       outputSchema: generalOutputSchema,
       annotations: readOnlyAnnotations(),
     },
@@ -844,7 +945,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     {
       title: 'Get note properties',
       description: 'Read the typed YAML Front Matter properties and current revision of one note.',
-      inputSchema: z.object({ note_id: noteId }),
+      inputSchema: getNotePropertiesInputSchema,
       outputSchema: generalOutputSchema,
       annotations: readOnlyAnnotations(),
     },
@@ -860,13 +961,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     {
       title: 'Update note properties',
       description: 'Merge or replace typed YAML Front Matter while preserving Markdown as the source of truth.',
-      inputSchema: z.object({
-        operation_id: operationId,
-        note_id: noteId,
-        expected_rev: expectedRev,
-        mode: z.enum(['merge', 'replace']).default('merge'),
-        properties: z.record(z.string().min(1).max(120), z.unknown()),
-      }),
+      inputSchema: updateNotePropertiesInputSchema,
       outputSchema: generalOutputSchema,
       annotations: writeAnnotations(true),
     },
@@ -887,14 +982,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     {
       title: 'Query note properties',
       description: 'Run a bounded lightweight Bases-style query over typed YAML Front Matter properties.',
-      inputSchema: z.object({
-        conditions: z.array(z.object({
-          key: z.string().trim().min(1).max(120),
-          operator: z.enum(['exists', 'equals', 'contains']),
-          value: z.unknown().optional(),
-        })).min(1).max(8),
-        limit: z.number().int().min(1).max(50).default(20),
-      }),
+      inputSchema: queryNotePropertiesInputSchema,
       outputSchema: generalOutputSchema,
       annotations: readOnlyAnnotations(),
     },
@@ -910,12 +998,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     {
       title: 'Create note share',
       description: 'Create or update a public note link with an optional password and bounded expiration.',
-      inputSchema: z.object({
-        operation_id: operationId,
-        note_id: noteId,
-        password: z.string().min(4).max(128).nullable().optional(),
-        expires_in_seconds: z.number().int().min(0).max(365 * 24 * 60 * 60).nullable().optional(),
-      }),
+      inputSchema: createNoteShareInputSchema,
       outputSchema: generalOutputSchema,
       annotations: writeAnnotations(true),
     },
@@ -934,7 +1017,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     {
       title: 'Revoke note share',
       description: 'Revoke the public link for one explicitly identified note.',
-      inputSchema: z.object({ operation_id: operationId, note_id: noteId }),
+      inputSchema: revokeNoteShareInputSchema,
       outputSchema: generalOutputSchema,
       annotations: { ...writeAnnotations(true), destructiveHint: true },
     },

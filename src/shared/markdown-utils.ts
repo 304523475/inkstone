@@ -4,6 +4,7 @@ import { truncateText } from './text-utils'
 
 
 export function stripCodeRegions(text: string): string {
+  if (!text.includes('`') && !text.includes('~~~')) return stripObsidianCommentRegions(text)
   const lines = text.split('\n')
   let inFence = false
   let fenceChar = ''
@@ -38,6 +39,7 @@ export function stripCodeRegions(text: string): string {
 }
 
 function stripObsidianCommentRegions(text: string): string {
+  if (!text.includes('%%')) return text
   const chars = text.split('')
   let start = -1
   for (let index = 0; index < text.length - 1; index++) {
@@ -176,6 +178,8 @@ function isEscaped(text: string, index: number): boolean {
 }
 
 function tagSearchText(text: string): string {
+  // Plain prose has no protected Markdown regions to mask.
+  if (!/[`~$%\[<]/.test(text) && !/(?:https?|ftp):\/\/|mailto:|\bwww\./iu.test(text)) return text
   const protectedChars = new Uint8Array(text.length)
   const protect = (start: number, end: number) => {
     const boundedStart = Math.max(0, start)
@@ -363,6 +367,7 @@ function tagSearchText(text: string): string {
 }
 
 function bodyTagOccurrences(content: string): BodyTagOccurrence[] {
+  if (!content.includes('#')) return []
   const safe = tagSearchText(content)
   const occurrences: BodyTagOccurrence[] = []
   for (const match of safe.matchAll(TAG_RE)) {
@@ -425,6 +430,7 @@ export interface WikiLink {
 
 
 export function extractWikiLinks(content: string): WikiLink[] {
+  if (!content.includes('[[')) return []
   const safe = stripCodeRegions(splitFrontMatter(content).body)
   const seen = new Set<string>()
   const out: WikiLink[] = []
@@ -704,16 +710,23 @@ export function toPlainText(md: string): string {
   return t.replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim()
 }
 
-const CJK_CHAR = /[\u2e80-\u9fff\uf900-\ufaff]/
+const CJK_CHAR = /[\u2e80-\u9fff\uf900-\ufaff]/g
 const CJK_GLOBAL = /[\u2e80-\u9fff\uf900-\ufaff\uff01-\uffe0]/g
 
 
 export function countText(md: string): { words: number; chars: number } {
   const plain = toPlainText(md)
   let cjk = 0
-  for (const ch of plain) if (CJK_CHAR.test(ch)) cjk++
-  const latin = plain.match(/[A-Za-z0-9_'’-]+/g)?.length ?? 0
-  return { words: cjk + latin, chars: [...md].length }
+  CJK_CHAR.lastIndex = 0
+  while (CJK_CHAR.exec(plain)) cjk++
+  let latin = 0
+  const latinWords = /[A-Za-z0-9_'’-]+/g
+  while (latinWords.exec(plain)) latin++
+  // A surrogate pair is one Unicode character; unpaired surrogates still count.
+  let chars = md.length
+  const pairs = /[\uD800-\uDBFF][\uDC00-\uDFFF]/g
+  while (pairs.exec(md)) chars--
+  return { words: cjk + latin, chars }
 }
 
 

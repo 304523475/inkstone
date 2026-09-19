@@ -15,6 +15,7 @@ import {
   selectAttachmentStorage,
 } from './backend'
 import { drainAttachmentCleanup } from './cleanup'
+import { attachmentQuotaBytes } from './quota'
 import {
   attachmentCleanupTarget,
   attachmentObjectKey,
@@ -58,7 +59,7 @@ export async function persistAttachmentWithinQuota(
     const usage = await env.DB.prepare(
       `SELECT COALESCE(SUM(size), 0) AS bytes FROM attachments WHERE user_id = ?1`,
     ).bind(input.userId).first<{ bytes: number }>()
-    if ((usage?.bytes ?? 0) + input.bytes.byteLength > LIMITS.attachmentQuotaBytes) {
+    if ((usage?.bytes ?? 0) + input.bytes.byteLength > attachmentQuotaBytes(env)) {
       throw ApiError.tooLarge('The account attachment quota has been reached')
     }
     return await persistAttachment(env, input)

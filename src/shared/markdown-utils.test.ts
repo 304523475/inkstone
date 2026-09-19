@@ -1,7 +1,27 @@
 import { describe, expect, it } from 'vitest'
-import { extractAttachmentIds, extractTags } from './markdown-utils'
+import { countText, stripCodeRegions, extractAttachmentIds, extractTags } from './markdown-utils'
+
+describe('large-text analysis', () => {
+  it('preserves plain text and masks comments while retaining line endings', () => {
+    expect(stripCodeRegions('hello\r\n世界😀')).toBe('hello\r\n世界😀')
+    expect(stripCodeRegions('a %%秘密\r\n隐藏%% b')).toBe('a     \r\n     b')
+    expect(stripCodeRegions('a \\%% visible')).toBe('a \\%% visible')
+    expect(stripCodeRegions('a %% hidden')).toBe('a          ')
+  })
+  it('counts Unicode characters, lone surrogates, Latin words and CJK consistently', () => {
+    const text = '你好 hello-world 42 😀𠀀\uD800'
+    expect(countText(text)).toEqual({ words: 4, chars: [...text].length })
+    expect(countText('```\n你好 hidden\n```\nvisible')).toEqual({ words: 1, chars: 25 })
+    expect(countText('one')).toEqual({ words: 1, chars: 3 })
+  })
+})
 
 describe('extractTags', () => {
+  it('finds prose tags while excluding URL fragments and protected regions', () => {
+    expect(extractTags('#visible plain text')).toEqual(['visible'])
+    expect(extractTags('#visible https://example.invalid/#hidden mailto:a#hidden www.example.invalid/#hidden')).toEqual(['visible'])
+    expect(extractTags('#visible %% #hidden %% $x #math$ <!-- #comment -->')).toEqual(['visible'])
+  })
   it('handles an unterminated inline-code marker with a mismatched trailing marker', () => {
     expect(extractTags('` #visible ``')).toEqual(['visible'])
   })
